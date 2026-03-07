@@ -1,0 +1,24 @@
+# ROS 2 工作空间生成的目录
+build/
+install/
+log/
+
+# Python 缓存和虚拟环境
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# 操作系统生成的文件
+.DS_Store
+Thumbs.db
+
+# 文本编辑器/IDE 的配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
