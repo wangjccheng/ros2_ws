@@ -47,16 +47,20 @@ class EmbodiedBrainNode(Node):
         self.sub_odom = self.create_subscription(Odometry, '/Odometry', self.odom_callback, 1)
 
         # ====== 动作发布器 ======
-        self.pub_action = self.create_publisher(Float32MultiArray, '/robot/action_command', 1)
+        self.pub_action = self.create_publisher(Float32MultiArray, '/robot/action_command_raw', 1)
 
         # 50Hz 核心控制循环
         self.timer = self.create_timer(0.02, self.control_loop)
+        self.imu_ready = False
+        self.odom_ready = False
+        self.map_ready = False
 
     def imu_callback(self, msg):
         self.base_ang_vel = np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z])
         quat = [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w]
         rot = R.from_quat(quat)
         self.proj_grav = rot.inv().apply(np.array([0.0, 0.0, -1.0]))
+        self.imu_ready = True
 
     def cmd_callback(self, msg):
         self.cmd_vw = np.array([msg.linear.x, msg.angular.z])
@@ -80,6 +84,7 @@ class EmbodiedBrainNode(Node):
     def odom_callback(self, msg):
         # 提取机器人在 odom 坐标系下的绝对 Z 高度
         self.current_base_z = msg.pose.pose.position.z
+        self.odom_ready = True
 
     def map_callback(self, msg):
         # 【你指出的那个缺失的函数，核心补全在这里！】
@@ -103,11 +108,24 @@ class EmbodiedBrainNode(Node):
 
             # 6. 拉平成 625 维的一维向量并存入缓存
             self.height_scan = relative_height.flatten()
+
+            self.map_ready = True
             
         except ValueError:
             self.get_logger().warn("高程图中找不到 'elevation' 图层，请检查 CuPy 配置！")
 
     def control_loop(self):
+        
+        # 【安全熔断机制】：必须等核心传感器全部上线，才允许网络前向推理！
+        if not (self.imu_ready and self.odom_ready and self.map_ready):
+            self.get_logger().info("等待传感器数据流介入... 保持底层急停状态", throttle_duration_sec=2.0)
+            
+                # 发送全 0 的绝对安全指令，确保 150kg 底盘死死锁住
+            safe_action_msg = Float32MultiArray()
+            safe_action_msg.data = [0.0] * 6
+            self.pub_action.publish(safe_action_msg)
+            return  # 直接跳出，不执行后续的神经网络代码
+        
         with torch.no_grad():
             # 1. 拼装 651 维的观测空间
             obs_flat_np = np.concatenate([
@@ -144,6 +162,7 @@ class EmbodiedBrainNode(Node):
             scaled_action[2:6] = clipped_action[2:6] * 0.3  # 4维腿位，乘 0.3
 
             # 5. 打包下发给底层电机/液压控制器
+            self.get_logger().info(f"🧠 AI 动作指令: {np.round(scaled_action, 3)}") # 新增这行打印
             action_msg = Float32MultiArray()
             action_msg.data = scaled_action.tolist()
             self.pub_action.publish(action_msg)
