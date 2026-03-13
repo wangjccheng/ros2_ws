@@ -25,26 +25,37 @@ def generate_launch_description():
         executable='static_transform_publisher',
         arguments=['--x', '0.8', '--y', '0.0', '--z', '-0.2', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'base_link', '--child-frame-id', 'camera_link']
     )
-
+    # 彻底修正语法错误的 body -> base_link 静态 TF
+    tf_body_to_base = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['--x', '0.0', '--y', '0.0', '--z', '0.0', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'body', '--child-frame-id', 'base_link']
+    )
+    
     # ==========================================
     # 2. 硬件与底层算法驱动 
     # (目前你手边没硬件，这里先写好模板，等硬件到了取消注释即可)
     # ==========================================
-    """
+  
     livox_driver = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('livox_ros_driver2'), 'launch', 'msg_MID360_launch.py')])
+        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('livox_ros_driver2'), 'launch_ROS2', 'msg_MID360_launch.py')])
     )
+    
+    # 先获取 fast_lio 安装后的共享目录路径
+    fast_lio_share_dir = get_package_share_directory('fast_lio')
+    # 拼接出 mid360.yaml 的绝对路径
+    fast_lio_config_path = os.path.join(fast_lio_share_dir, 'config', 'mid360.yaml')
     
     fast_lio = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('fast_lio'), 'launch', 'mapping.launch.py')]),
-        launch_arguments={'config_file': 'mid360.yaml'}.items()
+        launch_arguments={'config_file': fast_lio_config_path}.items()
     )
 
     realsense_camera = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('realsense2_camera'), 'launch', 'rs_launch.py')]),
         launch_arguments={'enable_pointcloud': 'true', 'align_depth.enable': 'true'}.items()
     )
-    """
+
     # 获取官方核心参数路径
     core_param_file = os.path.join(
         get_package_share_directory('elevation_mapping_cupy'), 
@@ -89,9 +100,10 @@ def generate_launch_description():
     return LaunchDescription([
         tf_lidar,
         tf_camera,
-        # livox_driver,     # 硬件到位后解除注释
-        # fast_lio,         # 硬件到位后解除注释
-        # realsense_camera, # 硬件到位后解除注释
+        tf_body_to_base,
+         livox_driver,     # 硬件到位后解除注释
+         fast_lio,         # 硬件到位后解除注释
+         realsense_camera, # 硬件到位后解除注释
         elevation_mapping,
         policy_brain
     ])

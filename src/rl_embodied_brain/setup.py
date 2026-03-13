@@ -13,7 +13,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # 加入下面这行，告诉 ROS 2 把 launch 文件夹搬运到安装目录
+        # 搬运 launch 文件夹到安装目录
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
     ],
     install_requires=['setuptools'],
@@ -30,7 +30,8 @@ setup(
     entry_points={
         'console_scripts': [
             # 格式：'终端启动命令 = 包名.文件名:主函数'
-            'policy_node = rl_embodied_brain.policy_inference_node:main'
+            'policy_node = rl_embodied_brain.policy_inference_node:main',
+            'mock_hardware_node = rl_embodied_brain.mock_hardware:main'
         ],
     },
 )

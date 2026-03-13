@@ -115,11 +115,11 @@
 
     # Default frame configuration (can be overridden in robot-specific configs)
 
-    map_frame: 'odom'                               # The map frame where the odometry source uses.
+    map_frame: 'camera_init'                               # The map frame where the odometry source uses.
 
     base_frame: 'base_link'                    # The robot's base frame. This frame will be a center of the map.
 
-    corrected_map_frame: 'odom'
+    corrected_map_frame: 'camera_init'
 
 
     #### Feature toggles ########
@@ -132,7 +132,7 @@
 
     enable_overlap_clearance: true
 
-    enable_pointcloud_publishing: false
+    enable_pointcloud_publishing: true
 
     enable_drift_corrected_TF_publishing: false
 
@@ -145,6 +145,10 @@
 
     use_only_above_for_upper_bound: false
 
+    subscribers:
+      lidar_front:
+        topic_name: '/cloud_registered_body'     # FAST-LIO 输出的点云
+        data_type: 'pointcloud'
 
 
 

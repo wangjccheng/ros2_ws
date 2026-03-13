@@ -5,6 +5,7 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from grid_map_msgs.msg import GridMap
 from std_msgs.msg import Float32MultiArray
+import numpy as np
 
 class MockHardwareNode(Node):
     def __init__(self):
@@ -46,7 +47,17 @@ class MockHardwareNode(Node):
         map_msg.layers = ['elevation']
         flat_data = Float32MultiArray()
         # 625 个格子的高度全部是 0.0 米 (绝对高度)
-        flat_data.data = [0.0] * 441 
+        
+        # 创建一个 21x21 的绝对平地
+        fake_map_2d = np.zeros((21, 21))
+        
+        # 假设矩阵的前 5 行代表机器人的正前方
+        # 我们在正前方的中间位置，放一个 0.5 米高的凸起（砖头）
+        fake_map_2d[0:5, 8:13] = 0.8 
+        
+        # 拉平后塞给假数据发布器
+        flat_data.data = fake_map_2d.flatten().tolist()
+        #flat_data.data = [0.0] * 441 
         map_msg.data = [flat_data]
         self.pub_map.publish(map_msg)
 

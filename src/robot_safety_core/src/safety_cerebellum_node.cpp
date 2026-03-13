@@ -15,6 +15,8 @@ using namespace std::chrono_literals;
 class SafetyCerebellumNode : public rclcpp::Node {
 public:
     SafetyCerebellumNode() : Node("safety_cerebellum_node") {
+        // 【新增】：声明干跑模式参数，默认设为 true（开启诊断锁死）
+        this->declare_parameter<bool>("dry_run_mode", true);
         // --- 1. 参数初始化 ---
         // 150kg 机体惯性极大，限制单次循环(0.02s)内的最大动作变化量
         // 前两个为轮速变化率，后四个为 EHA 腿部位姿变化率
@@ -163,7 +165,23 @@ private:
             
             // 最终硬件物理限幅（根据你底层实际的物理量纲设定）
             // 例如轮速不能超过某绝对值，EHA 行程不能超过某极限
-            hw_msg.data[i] = current_safe_action_[i]; 
+            //hw_msg.data[i] = current_safe_action_[i]; 
+        }
+        // 【新增：防线 6 - 诊断模式/干跑模式】
+        bool is_dry_run = this->get_parameter("dry_run_mode").as_bool();
+
+        if (is_dry_run) {
+            // 每秒打印一次对比信息，防止刷屏
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                "🩺 [诊断锁死中] AI原始指令: [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f] | 小脑限幅后试图输出: [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
+                target_ai_action_[0], target_ai_action_[1], target_ai_action_[2], target_ai_action_[3], target_ai_action_[4], target_ai_action_[5],
+                current_safe_action_[0], current_safe_action_[1], current_safe_action_[2], current_safe_action_[3], current_safe_action_[4], current_safe_action_[5]);
+            
+            // 强行将实际下发给硬件的指令覆写为绝对安全的 0
+            std::fill(hw_msg.data.begin(), hw_msg.data.end(), 0.0);
+        } else {
+            // 真实运行模式：装载小脑计算出的安全动作
+            for (size_t i = 0; i < 6; ++i) hw_msg.data[i] = current_safe_action_[i];
         }
 
         // 历经所有防线，下发安全指令
