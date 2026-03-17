@@ -12,24 +12,25 @@ def generate_launch_description():
     # 参数: X Y Z Yaw Pitch Roll 父坐标系 子坐标系
     # ==========================================
     # 雷达在底盘上的位置 (假设 Mid-360 安装在车体正中心偏上 0.5 米)
+    # 注意坐标系方向
     tf_lidar = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
 
-        arguments=['--x', '0.0', '--y', '0.0', '--z', '0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'base_link', '--child-frame-id', 'livox_frame']
+        arguments=['--x', '0.0', '--y', '0.0', '--z', '0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '3.1415926', '--frame-id', 'base_link', '--child-frame-id', 'livox_frame']
     )
     
     # 相机在底盘上的位置 (假设 D435i 安装在车头前 0.8 米处)
     tf_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['--x', '0.8', '--y', '0.0', '--z', '-0.2', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'base_link', '--child-frame-id', 'camera_link']
+        arguments=['--x', '0.0', '--y', '0.0', '--z', '0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'base_link', '--child-frame-id', 'camera_link']
     )
     # 彻底修正语法错误的 body -> base_link 静态 TF
     tf_body_to_base = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['--x', '0.0', '--y', '0.0', '--z', '0.0', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'body', '--child-frame-id', 'base_link']
+        arguments=['--x', '0.0', '--y', '0.0', '--z', '-0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '3.1415926', '--frame-id', 'body', '--child-frame-id', 'base_link']
     )
     
     # ==========================================

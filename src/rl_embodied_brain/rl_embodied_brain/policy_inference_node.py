@@ -30,10 +30,10 @@ class EmbodiedBrainNode(Node):
         self.base_ang_vel = np.zeros(3)
         self.proj_grav = np.array([0.0, 0.0, -1.0])
         self.cmd_vw = np.zeros(2)       
-        self.wheel_vel = np.zeros(4)    
-        self.leg_pos = np.zeros(4)      
-        self.leg_vel = np.zeros(4)      
-        self.prev_action = np.zeros(10)  
+        self.wheel_vel = np.zeros(4)   #网络输入顺序【LB、LF、RF、RB】 
+        self.leg_pos = np.zeros(4)      #同上
+        self.leg_vel = np.zeros(4)      #同上
+        self.prev_action = np.zeros(10)  #动作输出顺序【残轮-LF、LB、RF、RB】+【腿-LF、RF、LB、RB】
         self.height_scan = np.zeros(625)
         self.current_base_z = 0.0       
 
@@ -46,8 +46,8 @@ class EmbodiedBrainNode(Node):
         self.first_joint_init = False 
 
         # 预定义底层硬件的准确关节名称
-        self.wheel_names = ['FL_wheel', 'FR_wheel', 'RL_wheel', 'RR_wheel']
-        self.leg_names = ['FL_leg', 'FR_leg', 'RL_leg', 'RR_leg']
+        self.wheel_names = ['LB_wheel', 'LF_wheel', 'RF_wheel', 'RB_wheel']
+        self.leg_names = ['LB_leg', 'LF_leg', 'RF_leg', 'RB_leg']
 
         # ====== ROS 2 订阅器 ======
         self.sub_imu = self.create_subscription(Imu, '/livox/imu', self.imu_callback, 1)
@@ -74,10 +74,25 @@ class EmbodiedBrainNode(Node):
         self.timer = self.create_timer(0.005, self.control_loop)
 
     def imu_callback(self, msg):
-        self.base_ang_vel = np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z])
+        #！！！注意这个版本是IMU（雷达）倒放，对输入进行了处理
+        # 1. 角速度翻转 (绕X轴转180度：X不变，Y取反，Z取反)
+        self.base_ang_vel = np.array([
+            msg.angular_velocity.x, 
+            -msg.angular_velocity.y, 
+            -msg.angular_velocity.z
+        ])
+        
+        # 2. 重力投影翻转
         quat = [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w]
-        rot = R.from_quat(quat)
-        self.proj_grav = rot.inv().apply(np.array([0.0, 0.0, -1.0]))
+        rot_lidar = R.from_quat(quat)
+        proj_grav_lidar = rot_lidar.inv().apply(np.array([0.0, 0.0, -1.0]))
+        
+        # 将倒放雷达系下的重力向量，转换回 base_link 系
+        self.proj_grav = np.array([
+            proj_grav_lidar[0], 
+            -proj_grav_lidar[1], 
+            -proj_grav_lidar[2]
+        ])
         self.imu_ready = True
 
     def cmd_callback(self, msg):
@@ -113,7 +128,9 @@ class EmbodiedBrainNode(Node):
             self.get_logger().warn(f"轮子状态缺少指定的关节名称: {e}", throttle_duration_sec=2.0)
 
     def odom_callback(self, msg):
-        self.current_base_z = msg.pose.pose.position.z
+        #！！！这里根据雷达相对车辆base垂向偏移更改
+        # 将雷达的 Z 高度向下平移 0.5 米，得到真实的底盘中心高度
+        self.current_base_z = msg.pose.pose.position.z - 0.5
         self.odom_ready = True
 
     def map_callback(self, msg):
@@ -137,7 +154,7 @@ class EmbodiedBrainNode(Node):
             end_idx = start_idx + EXPECTED_SIZE
             cropped_grid = grid_2d[start_idx:end_idx, start_idx:end_idx]
             
-            self.height_scan = cropped_grid.T.flatten() 
+            self.height_scan = np.flipud(cropped_grid).flatten() 
             self.map_ready = True
             
         except ValueError:

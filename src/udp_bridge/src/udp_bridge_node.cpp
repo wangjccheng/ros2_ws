@@ -66,7 +66,7 @@ public:
         );
 
         // 【修改 2】：只保留腿部的 4 个关节名称
-        joint_names_ = {"FL_leg", "FR_leg", "RL_leg", "RR_leg"};
+        joint_names_ = {"LB_leg", "LF_leg", "RF_leg", "RB_leg"};
 
         recv_thread_ = std::thread(&UdpBridgeNode::receiveThreadLoop, this);
 

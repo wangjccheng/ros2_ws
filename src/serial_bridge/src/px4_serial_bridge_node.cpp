@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <geometry_msgs/msg/twist.hpp> // 新增：用于发布 cmd_vel 话题
 #include <iostream>
 #include <vector>
 #include <cstring>
@@ -16,9 +17,8 @@ class Px4SerialBridgeNode : public rclcpp::Node {
 public:
     Px4SerialBridgeNode() : Node("px4_serial_bridge_node"), running_(true), serial_fd_(-1) {
         // 1. 声明串口参数
-        // 默认使用 AGX Orin 上常用的 GPIO 串口 (或 /dev/ttyUSB0)
         this->declare_parameter<std::string>("serial_port", "/dev/ttyTHS0"); 
-        this->declare_parameter<int>("baud_rate", 921600); // 建议使用高波特率以保证 50Hz+ 的通讯频率
+        this->declare_parameter<int>("baud_rate", 921600); 
 
         std::string port_name = this->get_parameter("serial_port").as_string();
         int baud_rate = this->get_parameter("baud_rate").as_int();
@@ -30,27 +30,31 @@ public:
             return;
         }
 
-        // 3. ROS 2 订阅器 (接收安全小脑的最终指令)
+        // 3. 订阅器：接收 AI 大脑/安全小脑的最终动作指令
         sub_hw_cmd_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/robot/hardware_command", 
             rclcpp::SensorDataQoS(), 
             std::bind(&Px4SerialBridgeNode::commandCallback, this, std::placeholders::_1)
         );
 
-        // 4. ROS 2 发布器 (发布轮子状态给 AI 大脑)
+        // 4. 发布器：发布轮子状态
         pub_wheel_states_ = this->create_publisher<sensor_msgs::msg::JointState>(
-            "/robot/wheel_states", 
-            10
+            "/robot/wheel_states", 10
+        );
+
+        // 5. 【新增】发布器：发布遥控器 cmd 指令
+        pub_cmd_vel_ = this->create_publisher<geometry_msgs::msg::Twist>(
+            "/cmd_vel", 10
         );
 
         // 严格对应 AI 大脑的期望名称
-        wheel_names_ = {"FL_wheel", "FR_wheel", "RL_wheel", "RR_wheel"};
+        wheel_names_ = {"LB_wheel", "LF_wheel", "RF_wheel", "RB_wheel"};
 
-        // 5. 启动后台接收子线程
+        // 6. 启动后台接收子线程
         recv_thread_ = std::thread(&Px4SerialBridgeNode::receiveThreadLoop, this);
 
-        RCLCPP_INFO(this->get_logger(), "🚀 PX4 串口桥接已启动!");
-        RCLCPP_INFO(this->get_logger(), "   => 端口: %s | 波特率: %d", port_name.c_str(), baud_rate);
+        RCLCPP_INFO(this->get_logger(), "🚀 PX4 串口桥接已升级启动!");
+        RCLCPP_INFO(this->get_logger(), "   => 接收格式: 4个轮速 + 2个CMD (共24字节)");
     }
 
     ~Px4SerialBridgeNode() {
@@ -66,9 +70,9 @@ private:
 
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_hw_cmd_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_wheel_states_;
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_; // 新增的发布器
     std::vector<std::string> wheel_names_;
 
-    // --- 串口初始化配置 ---
     bool initSerialPort(const std::string& port_name, int baud_rate) {
         serial_fd_ = open(port_name.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
         if (serial_fd_ < 0) return false;
@@ -76,24 +80,20 @@ private:
         struct termios tty;
         if (tcgetattr(serial_fd_, &tty) != 0) return false;
 
-        // 设置波特率 (这里列出最常用的两种)
         speed_t speed = (baud_rate == 921600) ? B921600 : B115200;
         cfsetospeed(&tty, speed);
         cfsetispeed(&tty, speed);
 
-        // 8N1 (8个数据位，无校验，1个停止位)，无硬件流控
         tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
         tty.c_cflag |= (CLOCAL | CREAD);
         tty.c_cflag &= ~(PARENB | PARODD);
         tty.c_cflag &= ~CSTOPB;
         tty.c_cflag &= ~CRTSCTS;
 
-        // 纯 Raw 模式，不处理回车换行等控制字符
         tty.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
         tty.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
         tty.c_oflag &= ~OPOST;
 
-        // 读取阻塞设置 (VMIN = 0, VTIME = 1 表示 0.1秒超时)
         tty.c_cc[VMIN]  = 0;
         tty.c_cc[VTIME] = 1;
 
@@ -101,30 +101,27 @@ private:
         return true;
     }
 
-    // --- 【下发】：ROS 2 -> PX4 (只提取前 4 个轮子指令) ---
     void commandCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
-        if (msg->data.size() != 8) return; // 确保是完整的 8 维数据
+        if (msg->data.size() != 8) return; 
 
-        // 提取前 4 个数据 (索引 0, 1, 2, 3) 对应的轮速
+        // 提取前 4 个数据 (索引 0, 1, 2, 3) 对应的轮速指令下发给 PX4
         float payload[4];
         for (int i = 0; i < 4; ++i) {
             payload[i] = msg->data[i]; 
         }
 
-        // 向串口写入 16 个字节的二进制流
         write(serial_fd_, payload, sizeof(payload));
     }
 
-    // --- 【接收】：PX4 -> ROS 2 (打包并发布轮子状态) ---
+    // --- 【修改核心】：解析新的 6-float 格式 ---
     void receiveThreadLoop() {
-        // 期望从 PX4 收到 4个位置 + 4个速度 = 8 个 float (32 字节)
-        float recv_buffer[8]; 
+        // 期望从 PX4 收到: 4个轮速 + 1个线速度X + 1个角速度Z = 6 个 float (24 字节)
+        float recv_buffer[6]; 
         uint8_t* raw_buffer = reinterpret_cast<uint8_t*>(recv_buffer);
         int expected_bytes = sizeof(recv_buffer);
         
         while (running_) {
             int bytes_read = 0;
-            // 循环读取，直到凑够 32 个字节（串口数据可能会被切片到达）
             while (bytes_read < expected_bytes && running_) {
                 int n = read(serial_fd_, raw_buffer + bytes_read, expected_bytes - bytes_read);
                 if (n > 0) {
@@ -133,16 +130,24 @@ private:
             }
 
             if (bytes_read == expected_bytes) {
-                auto msg = sensor_msgs::msg::JointState();
-                msg.header.stamp = this->get_clock()->now();
-                msg.name = wheel_names_;
+                auto now = this->get_clock()->now();
 
-                // 假设 PX4 发回来的也是前 4 个为位置，后 4 个为速度
-                msg.position.assign(recv_buffer, recv_buffer + 4);
-                msg.velocity.assign(recv_buffer + 4, recv_buffer + 8);
-                msg.effort = std::vector<double>(4, 0.0); 
+                // 1. 打包并发布轮子状态 (JointState)
+                auto wheel_msg = sensor_msgs::msg::JointState();
+                wheel_msg.header.stamp = now;
+                wheel_msg.name = wheel_names_;
+                // 既然 PX4 不发位置了，我们给位置填充 0.0，避免 AI 节点数组越界
+                wheel_msg.position = std::vector<double>(4, 0.0);
+                wheel_msg.velocity.assign(recv_buffer, recv_buffer + 4);
+                wheel_msg.effort = std::vector<double>(4, 0.0); 
+                pub_wheel_states_->publish(wheel_msg);
 
-                pub_wheel_states_->publish(msg);
+                // 2. 打包并发布遥控指令 (Twist)
+                auto cmd_msg = geometry_msgs::msg::Twist();
+                // 假设第 5 个 float 是前进线速度 (x)，第 6 个 float 是转向角速度 (z)
+                cmd_msg.linear.x = recv_buffer[4];
+                cmd_msg.angular.z = recv_buffer[5];
+                pub_cmd_vel_->publish(cmd_msg);
             }
         }
     }

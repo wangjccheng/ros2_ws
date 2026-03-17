@@ -10,12 +10,13 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 # ==================================
 # 声明可执行文件并链接依赖
 # ==================================
 add_executable(px4_serial_bridge_node src/px4_serial_bridge_node.cpp)
-ament_target_dependencies(px4_serial_bridge_node rclcpp std_msgs sensor_msgs)
+ament_target_dependencies(px4_serial_bridge_node rclcpp std_msgs sensor_msgs geometry_msgs)
 
 # ==================================
 # 安装规则 (确保 launch 文件能找到它)

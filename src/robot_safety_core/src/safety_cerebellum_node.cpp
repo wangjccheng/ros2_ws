@@ -74,11 +74,21 @@ private:
     }
 
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-        tf2::Quaternion q(msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w);
-        tf2::Matrix3x3 m(q);
+        // 1. 获取雷达原始姿态的四元数
+        tf2::Quaternion q_lidar(msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w);
+        
+        // 2. 构造一个绕 X 轴旋转 180 度 (M_PI) 的补偿四元数
+        tf2::Quaternion q_rot;
+        q_rot.setRPY(M_PI, 0.0, 0.0); 
+        
+        // 3. 将雷达姿态翻转回底盘真实姿态
+        tf2::Quaternion q_base = q_lidar * q_rot;
+        
+        tf2::Matrix3x3 m(q_base);
         double roll, pitch, yaw;
         m.getRPY(roll, pitch, yaw);
         
+        // 现在的 roll 和 pitch 就是真实车体的姿态了
         proj_grav_z_ = -cos(roll) * cos(pitch); 
         last_imu_time_ = this->get_clock()->now();
     }
