@@ -2,6 +2,7 @@
 build/
 install/
 log/
+test/
 
 # Python 缓存和虚拟环境
 __pycache__/

@@ -53,7 +53,29 @@ def generate_launch_description():
 
     realsense_camera = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('realsense2_camera'), 'launch', 'rs_launch.py')]),
-        launch_arguments={'enable_pointcloud': 'true', 'align_depth.enable': 'true'}.items()
+        launch_arguments={'enable_pointcloud': 'true',      # 推荐使用这种带点的写法
+            'align_depth.enable': 'true',
+            'pointcloud.stream_filter': '2',  # 0:深度, 1:颜色, 2:两者 (为了融合颜色)
+            'enable_sync': 'true',
+            'enable_color': 'true',
+            'filters': 'spatial,temporal,decimation',
+            'depth_qos': 'DEFAULT',
+            'color_qos': 'DEFAULT',
+            'camera_info_qos': 'DEFAULT',
+            'depth_module.visual_preset': '2'
+            }.items()
+    )
+
+    pointcloud_node = Node(
+        package='depth_image_proc',
+        executable='point_cloud_xyzrgb_node',
+        name='point_cloud_xyzrgb_node',
+        remappings=[
+            ('rgb/image_rect_color', '/camera/camera/color/image_raw'),
+            ('rgb/camera_info', '/camera/camera/color/camera_info'),
+            ('depth_registered/image_rect', '/camera/camera/aligned_depth_to_color/image_raw'),
+            ('points', '/camera/camera/depth/color/points')
+        ]
     )
 
     # 获取官方核心参数路径
@@ -66,18 +88,43 @@ def generate_launch_description():
     # 必须等 FAST-LIO2 吐出 odom，以及静态 TF 建立完毕后，建图网格才能初始化
     # ==========================================
     elevation_mapping = TimerAction(
-        period=3.0,
+        period=5.0,
         actions=[
             Node(
                 package='elevation_mapping_cupy',
                 executable='elevation_mapping_node.py', # 【修正 1】加上 .py 后缀
-                name='elevation_mapping_cupy',          # 【修正 2】节点名必须和官方一致
+                name='elevation_mapping_node',          # 【修正 2】节点名必须和官方一致
                 parameters=[
                     core_param_file,                    # 【修正 3】官方数百个参数垫底
-                    '/home/agx/ros2_ws/ronghe.yaml'     # 你的定制 25x25 参数覆盖
+                    #'/home/agx/ros2_ws/ronghe.yaml'     # 你的定制 25x25 参数覆盖
                 ]
             )
         ]
+    )
+    # ==========================================
+    # 4. 底层通信与安全防线 (与高程图同步或稍后启动)
+    # 确保在 AI 发出指令前，底层通道和安全锁死已经准备就绪
+    # ==========================================
+    udp_bridge = Node(
+        package='udp_bridge',              # 【关键修改】：这里换成新包的名字
+        executable='udp_bridge_node',
+        name='udp_bridge_node',
+        output='screen',
+        parameters=[{
+            'target_ip': '192.168.2.20',
+            'target_port': 25000,
+            'local_port': 25001
+        }]
+    )
+
+    safety_cerebellum = Node(
+        package='robot_safety_core',  # 【关键修改】：这里换成新包的名字
+        executable='safety_cerebellum_node',
+        name='safety_cerebellum_node',
+        output='screen',
+        parameters=[{
+            'dry_run_mode': True  # ⚠️ 极其重要：实车调试初期务必保持为 True，确保只打印不输出动力
+        }]
     )
 
     # ==========================================
@@ -101,9 +148,13 @@ def generate_launch_description():
         tf_lidar,
         tf_camera,
         tf_body_to_base,
-         livox_driver,     # 硬件到位后解除注释
+         livox_driver, 
+        pointcloud_node,     # 硬件到位后解除注释
          fast_lio,         # 硬件到位后解除注释
          realsense_camera, # 硬件到位后解除注释
         elevation_mapping,
+        udp_bridge,
+        safety_cerebellum,
         policy_brain
+        
     ])
