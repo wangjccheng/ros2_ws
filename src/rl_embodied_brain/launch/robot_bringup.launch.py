@@ -19,7 +19,13 @@ def generate_launch_description():
 
         arguments=['--x', '0.0', '--y', '0.0', '--z', '0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '3.1415926', '--frame-id', 'base_link', '--child-frame-id', 'livox_frame']
     )
-    
+    # === 新增：Avia 的静态 TF ===
+    # 假设 Avia 装在 Mid360 前方 0.3 米处，你需要根据你的 150kg 机器人的实际安装位置测量并修改 X Y Z 
+    tf_avia = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['--x', '0.3', '--y', '0.0', '--z', '0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'base_link', '--child-frame-id', 'avia_frame']
+    )
     # 相机在底盘上的位置 (假设 D435i 安装在车头前 0.8 米处)
     tf_camera = Node(
         package='tf2_ros',
@@ -41,7 +47,20 @@ def generate_launch_description():
     livox_driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('livox_ros_driver2'), 'launch_ROS2', 'msg_MID360_launch.py')])
     )
-    
+    # === 新增：Avia 的驱动启动 ===
+    # 确保你已经在这个 launch 文件内部把话题重映射成了 /avia/lidar 和 /avia/imu
+    avia_driver = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('livox_ros2_avia'), 'launch', 'livox_lidar_launch.py')])
+    )
+
+    # === 新增：双雷达鲁棒融合节点 ===
+    # 将包名 'livox_merger' 替换为你实际创建的 ROS 2 package 名字
+    livox_merge_node = Node(
+        package='livox_merger', 
+        executable='robust_livox_merge_node',
+        name='robust_livox_merge_node',
+        output='screen'
+    )
     # 先获取 fast_lio 安装后的共享目录路径
     fast_lio_share_dir = get_package_share_directory('fast_lio')
     # 拼接出 mid360.yaml 的绝对路径
@@ -76,6 +95,25 @@ def generate_launch_description():
             ('rgb/camera_info', '/camera/camera/color/camera_info'),
             ('depth_registered/image_rect', '/camera/camera/aligned_depth_to_color/image_raw'),
             ('points', '/camera/camera/depth/color/points')
+        ]
+    )
+    # ==========================================
+    # 新增: IMU 姿态滤波 (Madgwick)
+    # 补充 Livox 缺失的四元数，将 /livox/imu 解算后输出到 /livox/imu_filtered
+    # ==========================================
+    imu_filter = Node(
+        package='imu_filter_madgwick',
+        executable='imu_filter_madgwick_node',
+        name='imu_filter_node',
+        output='screen',
+        parameters=[{
+            'use_mag': False,        # 无地磁计
+            'publish_tf': False,     # 不发布 TF，避免与 FAST-LIO 冲突
+            'world_frame': 'enu'
+        }],
+        remappings=[
+            ('/imu/data_raw', '/livox/imu'),
+            ('/imu/data', '/livox/imu_filtered')
         ]
     )
 
@@ -147,12 +185,16 @@ def generate_launch_description():
     # 将所有拼图打包返回
     return LaunchDescription([
         tf_lidar,
+        tf_avia,
         tf_camera,
         tf_body_to_base,
-         livox_driver, 
+        livox_driver, 
+        avia_driver,
+        livox_merge_node,
         pointcloud_node,     # 硬件到位后解除注释
          fast_lio,         # 硬件到位后解除注释
          realsense_camera, # 硬件到位后解除注释
+        imu_filter,          # 硬件到位后解除注释
         elevation_mapping,
         udp_bridge,
         safety_cerebellum,

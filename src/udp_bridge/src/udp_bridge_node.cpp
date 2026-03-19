@@ -17,8 +17,8 @@ class UdpBridgeNode : public rclcpp::Node {
 public:
     UdpBridgeNode() : Node("udp_bridge_node"), running_(true) {
         this->declare_parameter<std::string>("target_ip", "192.168.1.5"); 
-        this->declare_parameter<int>("target_port", 25000);                
-        this->declare_parameter<int>("local_port", 25001);                 
+        this->declare_parameter<int>("target_port", 1022);                
+        this->declare_parameter<int>("local_port", 1023);                 
         this->declare_parameter<int>("target_imu_port", 1024); // 【新增 2】：用于发送 IMU 数据的 Speedgoat 新端口
 
         std::string target_ip = this->get_parameter("target_ip").as_string();
@@ -66,13 +66,14 @@ public:
         // 订阅硬件指令
         sub_hw_cmd_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/robot/hardware_command", 
-            rclcpp::SensorDataQoS(), 
+            //rclcpp::SensorDataQoS(), 
+            10,
             std::bind(&UdpBridgeNode::commandCallback, this, std::placeholders::_1)
         );
 
         // 【新增 4】：订阅 IMU 数据 (请确认实际的 IMU 话题名称，这里默认使用 /imu/data)
         sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
-            "/livox/imu", 
+            "/livox/imu_filtered", 
             10, 
             std::bind(&UdpBridgeNode::imuCallback, this, std::placeholders::_1)
         );
@@ -108,32 +109,57 @@ private:
     std::vector<std::string> joint_names_;
 
     // --- 【新增 5】：处理 IMU 数据并直接发送给 Speedgoat ---
+    // --- 【修改核心】：将四元数转为欧拉角并打包发送 ---
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-        // 将 IMU 数据打包为 float 数组。
-        // 这里提供 10 个 float 的格式 (40 字节)：
-        // [0-3]: 四元数方向 (x, y, z, w)
-        // [4-6]: 角速度 (x, y, z)
-        // [7-9]: 线加速度 (x, y, z)
-        float payload[10];
-        
-        payload[0] = static_cast<float>(msg->orientation.x);
-        payload[1] = static_cast<float>(msg->orientation.y);
-        payload[2] = static_cast<float>(msg->orientation.z);
-        payload[3] = static_cast<float>(msg->orientation.w);
-        
-        payload[4] = static_cast<float>(msg->angular_velocity.x);
-        payload[5] = static_cast<float>(msg->angular_velocity.y);
-        payload[6] = static_cast<float>(msg->angular_velocity.z);
-        
-        payload[7] = static_cast<float>(msg->linear_acceleration.x);
-        payload[8] = static_cast<float>(msg->linear_acceleration.y);
-        payload[9] = static_cast<float>(msg->linear_acceleration.z);
+        // 1. 提取四元数
+        double qx = msg->orientation.x;
+        double qy = msg->orientation.y;
+        double qz = msg->orientation.z;
+        double qw = msg->orientation.w;
 
-        // 发送 40 字节给 Speedgoat 的专属 IMU 端口
+        // 2. 转换为欧拉角 (单位: 弧度 rad)
+        double roll, pitch, yaw;
+        
+        // Roll (绕 X 轴旋转)
+        double sinr_cosp = 2.0 * (qw * qx + qy * qz);
+        double cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy);
+        roll = std::atan2(sinr_cosp, cosr_cosp);
+
+        // Pitch (绕 Y 轴旋转)
+        double sinp = 2.0 * (qw * qy - qz * qx);
+        if (std::abs(sinp) >= 1.0)
+            pitch = std::copysign(M_PI / 2.0, sinp); // 防止出现超出 [-1, 1] 的极端情况
+        else
+            pitch = std::asin(sinp);
+
+        // Yaw (绕 Z 轴旋转)
+        double siny_cosp = 2.0 * (qw * qz + qx * qy);
+        double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+        yaw = std::atan2(siny_cosp, cosy_cosp);
+
+        // 3. 打包发送
+        // 现在总共是 9 个 float (36 字节)
+        // [0-2]: Roll, Pitch, Yaw
+        // [3-5]: 角速度 x, y, z
+        // [6-8]: 线加速度 x, y, z
+        float payload[9];
+        
+        payload[0] = static_cast<float>(roll);
+        payload[1] = static_cast<float>(pitch);
+        payload[2] = static_cast<float>(yaw);
+        
+        payload[3] = static_cast<float>(msg->angular_velocity.x);
+        payload[4] = static_cast<float>(msg->angular_velocity.y);
+        payload[5] = static_cast<float>(msg->angular_velocity.z);
+        
+        payload[6] = static_cast<float>(msg->linear_acceleration.x);
+        payload[7] = static_cast<float>(msg->linear_acceleration.y);
+        payload[8] = static_cast<float>(msg->linear_acceleration.z);
+
+        // 发送 36 字节
         sendto(sock_fd_, payload, sizeof(payload), 0,
                (struct sockaddr*)&target_imu_addr_, sizeof(target_imu_addr_));
     }
-
     // --- 【下发】：ROS 2 -> Speedgoat (只剥离腿部发过去) ---
     void commandCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
         if (msg->data.size() != 8) {
