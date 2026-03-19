@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <sensor_msgs/msg/joint_state.hpp> 
+#include <sensor_msgs/msg/imu.hpp> // 【新增 1】：引入 IMU 消息头文件
 #include <iostream>
 #include <vector>
 #include <cstring>
@@ -15,13 +16,15 @@
 class UdpBridgeNode : public rclcpp::Node {
 public:
     UdpBridgeNode() : Node("udp_bridge_node"), running_(true) {
-        this->declare_parameter<std::string>("target_ip", "192.168.2.20"); 
+        this->declare_parameter<std::string>("target_ip", "192.168.1.5"); 
         this->declare_parameter<int>("target_port", 25000);                
         this->declare_parameter<int>("local_port", 25001);                 
+        this->declare_parameter<int>("target_imu_port", 1024); // 【新增 2】：用于发送 IMU 数据的 Speedgoat 新端口
 
         std::string target_ip = this->get_parameter("target_ip").as_string();
         int target_port = this->get_parameter("target_port").as_int();
         int local_port = this->get_parameter("local_port").as_int();
+        int target_imu_port = this->get_parameter("target_imu_port").as_int();
 
         sock_fd_ = socket(AF_INET, SOCK_DGRAM, 0);
         if (sock_fd_ < 0) {
@@ -48,29 +51,42 @@ public:
         tv.tv_usec = 100000; 
         setsockopt(sock_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+        // 目标硬件指令地址 (原有的)
         memset(&target_addr_, 0, sizeof(target_addr_));
         target_addr_.sin_family = AF_INET;
         target_addr_.sin_port = htons(target_port);
         target_addr_.sin_addr.s_addr = inet_addr(target_ip.c_str());
 
+        // 【新增 3】：目标 IMU 数据地址
+        memset(&target_imu_addr_, 0, sizeof(target_imu_addr_));
+        target_imu_addr_.sin_family = AF_INET;
+        target_imu_addr_.sin_port = htons(target_imu_port);
+        target_imu_addr_.sin_addr.s_addr = inet_addr(target_ip.c_str());
+
+        // 订阅硬件指令
         sub_hw_cmd_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/robot/hardware_command", 
             rclcpp::SensorDataQoS(), 
             std::bind(&UdpBridgeNode::commandCallback, this, std::placeholders::_1)
         );
 
-        // 【修改 1】：专门发布腿部状态到 /robot/joint_states
+        // 【新增 4】：订阅 IMU 数据 (请确认实际的 IMU 话题名称，这里默认使用 /imu/data)
+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
+            "/livox/imu", 
+            10, 
+            std::bind(&UdpBridgeNode::imuCallback, this, std::placeholders::_1)
+        );
+
         pub_joint_states_ = this->create_publisher<sensor_msgs::msg::JointState>(
             "/robot/joint_states", 
             10
         );
 
-        // 【修改 2】：只保留腿部的 4 个关节名称
         joint_names_ = {"LB_leg", "LF_leg", "RF_leg", "RB_leg"};
 
         recv_thread_ = std::thread(&UdpBridgeNode::receiveThreadLoop, this);
 
-        RCLCPP_INFO(this->get_logger(), "🚀 双向 UDP 桥接已启动 (仅转发腿部 EHA 数据)!");
+        RCLCPP_INFO(this->get_logger(), "🚀 双向 UDP 桥接已启动 (支持硬件指令转发 & IMU直传)!");
     }
 
     ~UdpBridgeNode() {
@@ -82,36 +98,61 @@ public:
 private:
     int sock_fd_;
     struct sockaddr_in target_addr_;
+    struct sockaddr_in target_imu_addr_; // 【新增变量】：IMU专属目标地址
     std::atomic<bool> running_;
     std::thread recv_thread_;
 
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr sub_hw_cmd_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_; // 【新增变量】：IMU订阅者
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_joint_states_;
     std::vector<std::string> joint_names_;
 
+    // --- 【新增 5】：处理 IMU 数据并直接发送给 Speedgoat ---
+    void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
+        // 将 IMU 数据打包为 float 数组。
+        // 这里提供 10 个 float 的格式 (40 字节)：
+        // [0-3]: 四元数方向 (x, y, z, w)
+        // [4-6]: 角速度 (x, y, z)
+        // [7-9]: 线加速度 (x, y, z)
+        float payload[10];
+        
+        payload[0] = static_cast<float>(msg->orientation.x);
+        payload[1] = static_cast<float>(msg->orientation.y);
+        payload[2] = static_cast<float>(msg->orientation.z);
+        payload[3] = static_cast<float>(msg->orientation.w);
+        
+        payload[4] = static_cast<float>(msg->angular_velocity.x);
+        payload[5] = static_cast<float>(msg->angular_velocity.y);
+        payload[6] = static_cast<float>(msg->angular_velocity.z);
+        
+        payload[7] = static_cast<float>(msg->linear_acceleration.x);
+        payload[8] = static_cast<float>(msg->linear_acceleration.y);
+        payload[9] = static_cast<float>(msg->linear_acceleration.z);
+
+        // 发送 40 字节给 Speedgoat 的专属 IMU 端口
+        sendto(sock_fd_, payload, sizeof(payload), 0,
+               (struct sockaddr*)&target_imu_addr_, sizeof(target_imu_addr_));
+    }
+
     // --- 【下发】：ROS 2 -> Speedgoat (只剥离腿部发过去) ---
     void commandCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
-        // 【核心修改 3】：现在总指令是 8 维 (前 4 是轮子，后 4 是腿)
         if (msg->data.size() != 8) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, 
                 "⚠️ hardware_command 维度不对！预期 8，实际 %zu", msg->data.size());
             return;
         }
 
-        // 我们只提取后 4 个数据 (索引 4, 5, 6, 7) 发给 Speedgoat
         float payload[4];
         for (int i = 0; i < 4; ++i) {
             payload[i] = msg->data[i + 4]; 
         }
 
-        // 发送 16 字节 (4 个 float)
         sendto(sock_fd_, payload, sizeof(payload), 0,
                (struct sockaddr*)&target_addr_, sizeof(target_addr_));
     }
 
     // --- 【接收】：Speedgoat -> ROS 2 (只处理腿部状态) ---
     void receiveThreadLoop() {
-        // 【核心修改 4】：只期望收到 4位置 + 4速度 = 8 个 float (32 字节)
         float recv_buffer[8]; 
         struct sockaddr_in sender_addr;
         socklen_t sender_len = sizeof(sender_addr);
@@ -127,12 +168,8 @@ private:
                 msg.header.stamp = this->get_clock()->now();
                 msg.name = joint_names_;
 
-                // 前 4 个 float 是位置 (Position)
                 msg.position.assign(recv_buffer, recv_buffer + 4);
-                
-                // 后 4 个 float 是速度 (Velocity)
                 msg.velocity.assign(recv_buffer + 4, recv_buffer + 8);
-                
                 msg.effort = std::vector<double>(4, 0.0); 
 
                 pub_joint_states_->publish(msg);

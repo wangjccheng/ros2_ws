@@ -112,7 +112,7 @@ def generate_launch_description():
         name='udp_bridge_node',
         output='screen',
         parameters=[{
-            'target_ip': '192.168.2.20',
+            'target_ip': '192.168.1.5',
             'target_port': 25000,
             'local_port': 25001
         }]
@@ -124,7 +124,7 @@ def generate_launch_description():
         name='safety_cerebellum_node',
         output='screen',
         parameters=[{
-            'dry_run_mode': True  # ⚠️ 极其重要：实车调试初期务必保持为 True，确保只打印不输出动力
+            'dry_run_mode': False  # ⚠️ 极其重要：实车调试初期务必保持为 True，确保只打印不输出动力
         }]
     )
 
