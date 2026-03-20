@@ -66,8 +66,7 @@ public:
         // 订阅硬件指令
         sub_hw_cmd_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/robot/hardware_command", 
-            //rclcpp::SensorDataQoS(), 
-            10,
+            rclcpp::SensorDataQoS(), 
             std::bind(&UdpBridgeNode::commandCallback, this, std::placeholders::_1)
         );
 

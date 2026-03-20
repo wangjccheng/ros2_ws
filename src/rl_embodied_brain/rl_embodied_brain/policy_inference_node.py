@@ -2,7 +2,9 @@ import rclpy
 from rclpy.node import Node
 import torch
 import numpy as np
-
+# ====== 新增高程图处理所需的库 ======
+import cv2
+import scipy.ndimage as ndimage
 # ROS 2 消息类型
 from grid_map_msgs.msg import GridMap
 from sensor_msgs.msg import JointState, Imu
@@ -132,7 +134,7 @@ class EmbodiedBrainNode(Node):
         # 将雷达的 Z 高度向下平移 0.5 米，得到真实的底盘中心高度
         self.current_base_z = msg.pose.pose.position.z - 0.5
         self.odom_ready = True
-
+    '''
     def map_callback(self, msg):
         try:
             layer_idx = msg.layers.index('elevation')
@@ -153,6 +155,62 @@ class EmbodiedBrainNode(Node):
             start_idx = (grid_size - EXPECTED_SIZE) // 2
             end_idx = start_idx + EXPECTED_SIZE
             cropped_grid = grid_2d[start_idx:end_idx, start_idx:end_idx]
+            
+            self.height_scan = np.flipud(cropped_grid).flatten() 
+            self.map_ready = True
+            
+        except ValueError:
+            self.get_logger().warn("高程图中找不到 'elevation' 图层", throttle_duration_sec=2.0)
+    '''
+    def map_callback(self, msg):
+        try:
+            layer_idx = msg.layers.index('elevation')
+            terrain_data = np.array(msg.data[layer_idx].data)
+            grid_size = int(np.sqrt(terrain_data.shape[0]))
+            
+            # ==========================================
+            # 改进 1: 盲区推断 (Inpainting 修复 NaN)
+            # ==========================================
+            # 提取 NaN 掩码 (盲区位置为 1)
+            nan_mask = np.isnan(terrain_data).astype(np.uint8)
+            # 暂时用底盘高度填充，防止 OpenCV 报错
+            safe_terrain = np.nan_to_num(terrain_data, nan=self.current_base_z)
+            
+            safe_terrain_2d = safe_terrain.reshape(grid_size, grid_size)
+            nan_mask_2d = nan_mask.reshape(grid_size, grid_size)
+            
+            # 使用 Telea 算法，根据盲区边缘的有效地形高度，平滑推断并填充盲区
+            infilled_terrain_2d = cv2.inpaint(
+                safe_terrain_2d.astype(np.float32), 
+                nan_mask_2d, 
+                inpaintRadius=3, 
+                flags=cv2.INPAINT_TELEA
+            )
+            
+            # ==========================================
+            # 改进 2: 相对高度计算与限幅
+            # ==========================================
+            relative_height_2d = infilled_terrain_2d - self.current_base_z
+            relative_height_2d = np.clip(relative_height_2d, -2.0, 2.0)
+
+            # ==========================================
+            # 改进 3: 中值滤波 (消除雷达尖刺噪点)
+            # ==========================================
+            # 使用 3x3 窗口过滤孤立噪点，同时保留台阶的锐利边缘
+            filtered_grid_2d = ndimage.median_filter(relative_height_2d, size=3)
+            
+            EXPECTED_SIZE = 25  
+            
+            if grid_size < EXPECTED_SIZE:
+                self.get_logger().warn(f"高程图过小: 当前 {grid_size}x{grid_size}，AI需要 {EXPECTED_SIZE}x{EXPECTED_SIZE}！", throttle_duration_sec=2.0)
+                return
+
+            # ==========================================
+            # 改进 4: 中心裁剪与展平
+            # ==========================================
+            start_idx = (grid_size - EXPECTED_SIZE) // 2
+            end_idx = start_idx + EXPECTED_SIZE
+            cropped_grid = filtered_grid_2d[start_idx:end_idx, start_idx:end_idx]
             
             self.height_scan = np.flipud(cropped_grid).flatten() 
             self.map_ready = True

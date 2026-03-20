@@ -155,6 +155,16 @@ def generate_launch_description():
             'local_port': 25001
         }]
     )
+    px4_serial_bridge = Node(
+        package='serial_bridge',       
+        executable='px4_serial_bridge_node',
+        name='px4_serial_bridge_node',
+        output='screen',
+        parameters=[{
+            'serial_port': '/dev/pts/4',  # <--- 改成这里真实存在的设备名
+            'baud_rate': 921600
+        }]
+    )
 
     safety_cerebellum = Node(
         package='robot_safety_core',  # 【关键修改】：这里换成新包的名字
@@ -192,11 +202,12 @@ def generate_launch_description():
         avia_driver,
         livox_merge_node,
         pointcloud_node,     # 硬件到位后解除注释
-         fast_lio,         # 硬件到位后解除注释
-         realsense_camera, # 硬件到位后解除注释
+        fast_lio,         # 硬件到位后解除注释
+        realsense_camera, # 硬件到位后解除注释
         imu_filter,          # 硬件到位后解除注释
         elevation_mapping,
         udp_bridge,
+        px4_serial_bridge,
         safety_cerebellum,
         policy_brain
         

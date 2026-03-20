@@ -133,15 +133,19 @@ private:
         }
         merged_msg.timebase = base_time;
 
+
         // ==========================================
         // 处理 Mid360 点云
         // ==========================================
         if (msg_mid360) {
             for (const auto& pt : msg_mid360->points) {
-                // 🚨 防御2：空间电子围栏 (阻断 VoxelGrid 爆炸)
                 if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
                 float dist2 = pt.x*pt.x + pt.y*pt.y + pt.z*pt.z;
-                if (dist2 < 0.1 || dist2 > 10000.0) continue; // 丢弃极近噪点和 >100m 外的离谱点
+                if (dist2 < 0.1 || dist2 > 10000.0) continue; 
+
+                // 🚨 新增：Z 轴高度硬截断 (过滤高空与地底噪点)
+                // 假设保留雷达上方 1.0 米到下方 1.5 米的地形点 (根据你的车辆高度调整)
+                if (pt.z > 1.0 || pt.z < -1.5) continue; 
 
                 livox_ros_driver2::msg::CustomPoint new_pt = pt;
                 new_pt.offset_time = pt.offset_time;
@@ -154,29 +158,24 @@ private:
         // ==========================================
         if (msg_avia && tf_ready_) {
             for (const auto& avia_pt : msg_avia->points) {
-                // 计算 Avia 点的绝对物理时间
+                // ...(绝对时间防爆盾逻辑保持不变)...
                 uint64_t absolute_time = msg_avia->timebase + avia_pt.offset_time;
-                
-                // 🚨 防御3：时间硬截断！(解决飞点和崩溃的核心)
-                // 绝对不允许任何一个点的时间早于当前合并帧的 base_time
                 if (absolute_time < base_time) continue; 
-                
-                // 同时，不允许点超过正常一帧的时间跨度 (120ms宽限)
                 uint64_t offset = absolute_time - base_time;
                 if (offset > 120000000ULL) continue; 
 
-                // 🚨 防御4：过滤 Avia 的内部玻璃罩反射噪点 (必须在乘外参之前过滤！)
                 if (!std::isfinite(avia_pt.x) || !std::isfinite(avia_pt.y) || !std::isfinite(avia_pt.z)) continue;
                 float dist2 = avia_pt.x*avia_pt.x + avia_pt.y*avia_pt.y + avia_pt.z*avia_pt.z;
-                // Avia 的内部反光较严重，在此直接过滤掉距离传感器 0.5m 内的所有点
                 if (dist2 < 0.25 || dist2 > 10000.0) continue; 
-
-                livox_ros_driver2::msg::CustomPoint new_pt;
-                new_pt.offset_time = offset;
 
                 Eigen::Vector3f pt_in_avia(avia_pt.x, avia_pt.y, avia_pt.z);
                 Eigen::Vector3f pt_in_mid360 = R_avia_to_mid360_ * pt_in_avia + t_avia_to_mid360_;
 
+                // 🚨 新增：转换到 Mid360 坐标系后，执行 Z 轴高度硬截断
+                if (pt_in_mid360.z() > 1.0 || pt_in_mid360.z() < -1.5) continue;
+
+                livox_ros_driver2::msg::CustomPoint new_pt;
+                new_pt.offset_time = offset;
                 new_pt.x = pt_in_mid360.x();
                 new_pt.y = pt_in_mid360.y();
                 new_pt.z = pt_in_mid360.z();

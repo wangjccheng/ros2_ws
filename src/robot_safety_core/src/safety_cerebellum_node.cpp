@@ -19,7 +19,7 @@ public:
         
         // --- 1. 参数初始化 ---
         // 前 4 个为轮速变化率，后 4 个为 EHA 腿部位姿变化率 (8维)
-        max_action_delta_ = {0.005, 0.005, 0.005, 0.005, 0.0001, 0.0001, 0.0001, 0.0001}; 
+        max_action_delta_ = {0.00125, 0.00125, 0.00125, 0.00125, 0.000025, 0.000025, 0.000025, 0.000025}; 
         current_safe_action_.resize(8, 0.0);
         
         e_stop_active_ = false;
@@ -49,7 +49,7 @@ public:
         // --- 4. 看门狗与控制循环 (50Hz) ---
         last_ai_time_ = this->get_clock()->now();
         last_imu_time_ = this->get_clock()->now();
-        timer_ = this->create_wall_timer(20ms, std::bind(&SafetyCerebellumNode::controlLoop, this));
+        timer_ = this->create_wall_timer(5ms, std::bind(&SafetyCerebellumNode::controlLoop, this));
 
         RCLCPP_INFO(this->get_logger(), "🛡️ 硬件安全小脑(8维架构)已启动！守护神已就位。");
     }
