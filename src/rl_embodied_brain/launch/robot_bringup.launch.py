@@ -161,8 +161,8 @@ def generate_launch_description():
         name='px4_serial_bridge_node',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/pts/4',  # <--- 改成这里真实存在的设备名
-            'baud_rate': 921600
+            'serial_port': '/dev/pts/2',  # <--- 改成这里真实存在的设备名
+            'baud_rate': 115200
         }]
     )
 
