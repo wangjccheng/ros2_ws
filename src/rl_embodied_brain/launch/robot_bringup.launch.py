@@ -17,26 +17,35 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
 
-        arguments=['--x', '0.0', '--y', '0.0', '--z', '0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '3.1415926', '--frame-id', 'base_link', '--child-frame-id', 'livox_frame']
+        arguments=['--x', '0.26856', '--y', '0.0', '--z', '-0.38302', 
+                   '--yaw', '1.57',  '--pitch', '0.0', '--roll', '2.932', 
+                   '--frame-id', 'base_link', '--child-frame-id', 'livox_frame']
     )
     # === 新增：Avia 的静态 TF ===
     # 假设 Avia 装在 Mid360 前方 0.3 米处，你需要根据你的 150kg 机器人的实际安装位置测量并修改 X Y Z 
     tf_avia = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['--x', '0.3', '--y', '0.0', '--z', '0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'base_link', '--child-frame-id', 'avia_frame']
+        arguments=['--x', '0.43983', '--y', '0.0', '--z', '-0.28', 
+                   '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', 
+                   '--frame-id', 'base_link', '--child-frame-id', 'avia_frame']
     )
     # 相机在底盘上的位置 (假设 D435i 安装在车头前 0.8 米处)
     tf_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['--x', '0.0', '--y', '0.0', '--z', '0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '0.0', '--frame-id', 'base_link', '--child-frame-id', 'camera_link']
+        arguments=['--x', '0.46259', '--y', '0.0', '--z', '-0.21177', 
+                   '--yaw', '0.0', '--pitch', '0.87266', '--roll', '0.0',
+                     '--frame-id', 'base_link', '--child-frame-id', 'camera_link']
     )
     # 彻底修正语法错误的 body -> base_link 静态 TF
     tf_body_to_base = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['--x', '0.0', '--y', '0.0', '--z', '-0.5', '--yaw', '0.0', '--pitch', '0.0', '--roll', '3.1415926', '--frame-id', 'body', '--child-frame-id', 'base_link']
+        # 这里是 base_link 在 body (IMU) 坐标系下的精确逆运算结果
+        arguments=['--x', '0.0', '--y', '-0.18323', '--z', '-0.4303', 
+                   '--yaw', '1.5708', '--pitch', '-0.209', '--roll', '3.14159', 
+                   '--frame-id', 'body', '--child-frame-id', 'base_link']
     )
     
     # ==========================================
@@ -61,16 +70,6 @@ def generate_launch_description():
         name='robust_livox_merge_node',
         output='screen'
     )
-    # 先获取 fast_lio 安装后的共享目录路径
-    fast_lio_share_dir = get_package_share_directory('fast_lio')
-    # 拼接出 mid360.yaml 的绝对路径
-    fast_lio_config_path = os.path.join(fast_lio_share_dir, 'config', 'mid360.yaml')
-    
-    fast_lio = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('fast_lio'), 'launch', 'mapping.launch.py')]),
-        launch_arguments={'config_file': fast_lio_config_path}.items()
-    )
-
     realsense_camera = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('realsense2_camera'), 'launch', 'rs_launch.py')]),
         launch_arguments={'enable_pointcloud': 'true',      # 推荐使用这种带点的写法
@@ -97,8 +96,25 @@ def generate_launch_description():
             ('points', '/camera/camera/depth/color/points')
         ]
     )
+    self_filter_module = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            os.path.join(get_package_share_directory('robot_self_filter'), 'launch', 'filter.launch.py')
+        ])
+    )
+    # 先获取 fast_lio 安装后的共享目录路径
+    fast_lio_share_dir = get_package_share_directory('fast_lio')
+    # 拼接出 mid360.yaml 的绝对路径
+    fast_lio_config_path = os.path.join(fast_lio_share_dir, 'config', 'mid360.yaml')
+    
+    fast_lio = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('fast_lio'), 'launch', 'mapping.launch.py')]),
+        launch_arguments={'config_file': fast_lio_config_path}.items()
+    )
+
+
+
     # ==========================================
-    # 新增: IMU 姿态滤波 (Madgwick)
+    # 新增: IMU 姿态滤波 (Madgwick)：本身没有四元数，我们通过算法积分得到的，后续自udp中还有将四元数转变成角度
     # 补充 Livox 缺失的四元数，将 /livox/imu 解算后输出到 /livox/imu_filtered
     # ==========================================
     imu_filter = Node(
@@ -135,7 +151,6 @@ def generate_launch_description():
                 name='elevation_mapping_node',          # 【修正 2】节点名必须和官方一致
                 parameters=[
                     core_param_file,                    # 【修正 3】官方数百个参数垫底
-                    #'/home/agx/ros2_ws/ronghe.yaml'     # 你的定制 25x25 参数覆盖
                 ]
             )
         ]
@@ -201,9 +216,11 @@ def generate_launch_description():
         livox_driver, 
         avia_driver,
         livox_merge_node,
-        pointcloud_node,     # 硬件到位后解除注释
+        realsense_camera,
+        pointcloud_node, 
+        self_filter_module,    # 硬件到位后解除注释
         fast_lio,         # 硬件到位后解除注释
-        realsense_camera, # 硬件到位后解除注释
+         # 硬件到位后解除注释
         imu_filter,          # 硬件到位后解除注释
         elevation_mapping,
         udp_bridge,

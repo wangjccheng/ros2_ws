@@ -1,0 +1,38 @@
+# 1. 主车体大长方体
+lidar_filter_main:
+  ros__parameters:
+    input_frame: "base_link"
+    output_frame: "base_link"
+    min_x: 0.25
+    max_x: 0.65
+    min_y: -0.3
+    max_y: 0.3
+    min_z: -0.21
+    max_z: -0.15
+    negative: true
+
+# 2. 侧边/外部 EHA 执行器 小长方体 A
+lidar_filter_sub1:
+  ros__parameters:
+    input_frame: "base_link"
+    output_frame: "base_link"
+    min_x: -0.72385      # 根据实际凸起物的位置测量
+    max_x: 0.72385
+    min_y: 0.2
+    max_y: 0.42
+    min_z: -0.82466
+    max_z: -0.21
+    negative: true
+
+# 3. 侧边/外部 EHA 执行器 小长方体 B
+lidar_filter_sub2:
+  ros__parameters:
+    input_frame: "base_link"
+    output_frame: "base_link"
+    min_x: -0.72385
+    max_x: 0.72385
+    min_y: -0.42  # 假设与 A 对称
+    max_y: -0.2
+    min_z: -0.82466
+    max_z: -0.21
+    negative: true

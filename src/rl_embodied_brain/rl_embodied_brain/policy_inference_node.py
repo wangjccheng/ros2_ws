@@ -18,7 +18,7 @@ class EmbodiedBrainNode(Node):
     def __init__(self):
         super().__init__('policy_inference_node')
         self.device = torch.device('cuda:0')
-        self.model = torch.jit.load('/home/agx/ros2_ws/src/rl_embodied_brain/rl_embodied_brain/policy_0313.pt').to(self.device)
+        self.model = torch.jit.load('/home/agx/ros2_ws/src/rl_embodied_brain/models/policy_0313.pt').to(self.device)
         self.model.eval()
         
         try:
@@ -52,7 +52,7 @@ class EmbodiedBrainNode(Node):
         self.leg_names = ['LB_leg', 'LF_leg', 'RF_leg', 'RB_leg']
 
         # ====== ROS 2 订阅器 ======
-        self.sub_imu = self.create_subscription(Imu, '/livox/imu', self.imu_callback, 1)
+        self.sub_imu = self.create_subscription(Imu, '/livox/imu_filtered', self.imu_callback, 1)
         
         # 【修改 2】：将关节订阅器拆分为腿部和轮子两个
         self.sub_legs = self.create_subscription(JointState, '/robot/joint_states', self.leg_callback, 1)
