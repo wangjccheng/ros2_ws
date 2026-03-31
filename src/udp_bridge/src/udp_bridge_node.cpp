@@ -109,53 +109,74 @@ private:
 
     // --- 【新增 5】：处理 IMU 数据并直接发送给 Speedgoat ---
     // --- 【修改核心】：将四元数转为欧拉角并打包发送 ---
+    // --- 【修改核心】：補償雷達倒裝、轉為歐拉角並打印驗證 ---
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-        // 1. 提取四元数
-        double qx = msg->orientation.x;
-        double qy = msg->orientation.y;
-        double qz = msg->orientation.z;
-        double qw = msg->orientation.w;
+        // 1. 提取原始四元數 (這代表倒放的雷達位姿)
+        double qx_lidar = msg->orientation.x;
+        double qy_lidar = msg->orientation.y;
+        double qz_lidar = msg->orientation.z;
+        double qw_lidar = msg->orientation.w;
 
-        // 2. 转换为欧拉角 (单位: 弧度 rad)
+        // =========================================================
+        // 🚨 【核心修復】：補償雷達倒裝引起的 ±180度 跳變！
+        // 將四元數乘以一個繞X軸旋轉180度的四元數，把它轉回 Base 底盤視角
+        // 數學推導: q_base = q_lidar * q_rotX(180)
+        // =========================================================
+        double qx = qw_lidar;
+        double qy = qz_lidar;
+        double qz = -qy_lidar;
+        double qw = -qx_lidar;
+
+        // 2. 轉換為歐拉角 (單位: 弧度 rad)
         double roll, pitch, yaw;
         
-        // Roll (绕 X 轴旋转)
+        // Roll (繞 X 軸旋轉)
         double sinr_cosp = 2.0 * (qw * qx + qy * qz);
         double cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy);
         roll = std::atan2(sinr_cosp, cosr_cosp);
 
-        // Pitch (绕 Y 轴旋转)
+        // Pitch (繞 Y 軸旋轉)
         double sinp = 2.0 * (qw * qy - qz * qx);
         if (std::abs(sinp) >= 1.0)
-            pitch = std::copysign(M_PI / 2.0, sinp); // 防止出现超出 [-1, 1] 的极端情况
+            pitch = std::copysign(M_PI / 2.0, sinp); // 防止出現超出 [-1, 1] 的極端情況
         else
             pitch = std::asin(sinp);
 
-        // Yaw (绕 Z 轴旋转)
+        // Yaw (繞 Z 軸旋轉)
         double siny_cosp = 2.0 * (qw * qz + qx * qy);
         double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
         yaw = std::atan2(siny_cosp, cosy_cosp);
 
-        // 3. 打包发送
-        // 现在总共是 9 个 float (36 字节)
-        // [0-2]: Roll, Pitch, Yaw
-        // [3-5]: 角速度 x, y, z
-        // [6-8]: 线加速度 x, y, z
+        // =========================================================
+        // 🔍 【新增功能】：在終端打印角度信息，方便實時驗證
+        // =========================================================
+        double roll_deg = roll * 180.0 / M_PI;
+        double pitch_deg = pitch * 180.0 / M_PI;
+        double yaw_deg = yaw * 180.0 / M_PI;
+        
+        // 每 0.5 秒打印一次，避免洗版
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+            "🔍 IMU (Base系) -> Roll: %6.2f°, Pitch: %6.2f°, Yaw: %6.2f°", 
+            roll_deg, pitch_deg, yaw_deg);
+
+        // 3. 打包發送
+        // 注意：除了歐拉角，傳給 Speedgoat 的角速度和線加速度也必須翻轉到 Base 系！
+        // 規則：X不變，Y取反，Z取反
         float payload[9];
         
-        payload[0] = static_cast<float>(roll);
+        payload[0] =static_cast<float>(roll);
         payload[1] = static_cast<float>(pitch);
         payload[2] = static_cast<float>(yaw);
         
         payload[3] = static_cast<float>(msg->angular_velocity.x);
-        payload[4] = static_cast<float>(msg->angular_velocity.y);
-        payload[5] = static_cast<float>(msg->angular_velocity.z);
+        payload[4] = static_cast<float>(-msg->angular_velocity.y); // 取反
+        payload[5] = static_cast<float>(-msg->angular_velocity.z); // 取反
         
         payload[6] = static_cast<float>(msg->linear_acceleration.x);
-        payload[7] = static_cast<float>(msg->linear_acceleration.y);
-        payload[8] = static_cast<float>(msg->linear_acceleration.z);
+        payload[7] = static_cast<float>(-msg->linear_acceleration.y); // 取反
+        payload[8] = static_cast<float>(-msg->linear_acceleration.z); // 取反
 
-        // 发送 36 字节
+        // 發送 36 字節
         sendto(sock_fd_, payload, sizeof(payload), 0,
                (struct sockaddr*)&target_imu_addr_, sizeof(target_imu_addr_));
     }
